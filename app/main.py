@@ -1,17 +1,32 @@
 from fastapi import FastAPI
+from pydantic import BaseModel
+
+class Item(BaseModel):
+  name: str
+  description: str | None = None
+  price: float
+  tax: float | None = None
 
 app = FastAPI()
 
-fake_items_db = [{"item_name": "Foo"}, {"item_name": "Bar"}, {"item_name": "Baz"}]
+# モデルを使用した例
+@app.post("/items/")
+async def create_item(item: Item):
+    item_dict = item.model_dump()
+    if item.tax is not None:
+       price_with_tax = item.price + item.tax
+       item_dict.update({"price_with_tax": price_with_tax})
+    return item_dict
 
-# クエリパラメータにデフォルト値設定
-@app.get("/items/")
-async def read_item(skip: int = 0, limit: int = 10):
-    return fake_items_db[skip : skip + limit]
+# リクエストボディとパスパラメータ
+@app.post("/items/{item_id}")
+async def update_item(item_id: int, item: Item):
+    return {"item_id": item_id, **item.model_dump()}  #dictionaryを展開して新しくdictを返す JSでいうスプレッド構文
 
-# オプショナルパラメータ
-@app.get("/items/{item_id}")
-async def read_item(item_id: str, q: str | None = None):
-    if q:
-        return {"item_id": item_id, "q": q}
-    return {"item_id": item_id}
+# リクエストボディ+パス＋クエリパラメータ
+@app.put("items/{item_id}")
+async def update_item(item_id: int, item: Item, q: str | None = None):
+  result = {"item_id": item_id, **item.model_dump()}
+  if q:
+    result.update({"q": q})
+  return result
