@@ -1,32 +1,74 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from typing import Annotated
 
-class Item(BaseModel):
-  name: str
-  description: str | None = None
-  price: float
-  tax: float | None = None
+from fastapi import Depends, FastAPI, HTTPException, Query
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
+# 単一モデル
+# モデルの作成
+class Hero(SQLModel, table=True):
+  id: int | None = Field(default=None, primary_key=True)
+  name: str = Field(index=True)
+  age: int | None = Field(default=None, index=True)
+  secret_name: str
+
+# Engineの作成(dbの接続を保持する役割)
+sqlite_file_name = "database.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
+
+connect_args = {"check_same_thread": False}
+engine = create_engine(sqlite_url, connect_args=connect_args)
+
+# テーブルの作成
+def create_db_and_tables():
+  SQLModel.metadata.create_all(engine)
+
+# Session依存関係の作成
+def get_session():
+  with Session(engine) as session:
+    yield session
+
+SessionDep = Annotated[Session, Depends(get_session)]
+
+# 起動時にテーブルを作成
+# 本番では、アプリを起動する前にマイグレーションスクリプトを実行するのが一般的でしょう。
 app = FastAPI()
 
-# モデルを使用した例
-@app.post("/items/")
-async def create_item(item: Item):
-    item_dict = item.model_dump()
-    if item.tax is not None:
-       price_with_tax = item.price + item.tax
-       item_dict.update({"price_with_tax": price_with_tax})
-    return item_dict
+@app.on_event("startup")
+def on_startup():
+  create_db_and_tables()
 
-# リクエストボディとパスパラメータ
-@app.post("/items/{item_id}")
-async def update_item(item_id: int, item: Item):
-    return {"item_id": item_id, **item.model_dump()}  #dictionaryを展開して新しくdictを返す JSでいうスプレッド構文
+# Heroの作成
+@app.post("/heroes/")
+def create_hero(hero: Hero, session: SessionDep) -> Hero:
+  session.add(hero)
+  session.commit()
+  session.refresh(hero) # refreshすることでdbで採番した値を取得する
+  return hero
 
-# リクエストボディ+パス＋クエリパラメータ
-@app.put("items/{item_id}")
-async def update_item(item_id: int, item: Item, q: str | None = None):
-  result = {"item_id": item_id, **item.model_dump()}
-  if q:
-    result.update({"q": q})
-  return result
+# Heroの取得
+@app.get("/heroes/")
+def read_heroes(
+  session: SessionDep,
+  offset: int = 0,
+  limit: Annotated[int, Query(le=100)] = 100,
+) -> list[Hero]:
+  heroes = session.exec(select(Hero).offset(offset).limit(limit)).all()
+  return heroes
+
+# 単一のHeroの取得
+@app.get("/heroes/{hero_id}")
+def read_hero(hero_id: int, session: SessionDep) -> Hero:
+  hero = session.get(Hero, hero_id)
+  if not hero:
+    raise HTTPException(status_code=404, detail="Hero not found")
+  return hero
+
+# Heroの削除
+@app.delete("/heroes/{hero_id}")
+def delete_hero(hero_id: int, session: SessionDep):
+  hero = session.get(Hero, hero_id)
+  if not hero:
+    raise HTTPException(status_code=404, detail="Hero not found")
+  session.delete(hero)
+  session.commit()
+  return {"ok": True}
