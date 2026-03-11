@@ -3,13 +3,38 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
-# 単一モデル
-# モデルの作成
-class Hero(SQLModel, table=True):
-  id: int | None = Field(default=None, primary_key=True)
+# 複数モデル
+# 継承用またはベースクラス
+class HeroBase(SQLModel): # table=Trueがないのでデータモデル
   name: str = Field(index=True)
   age: int | None = Field(default=None, index=True)
+
+# テーブルモデル
+class Hero(HeroBase, table=True): # table=Trueのものだけがテーブルモデル
+  id: int | None = Field(default=None, primary_key=True)
   secret_name: str
+
+# 公開用データモデル
+class HeroPublic(HeroBase): # idは採番済みのためintで指定
+  id: int
+
+# 作成用データモデル
+class HeroCreate(HeroBase):
+  secret_name: str
+
+# 更新用データモデル
+class HeroUpdate(HeroBase):
+  name: str | None = None # 型をstr or Noneにして、defaultをNoneにする
+  age: int | None = None
+  secret_name: str | None = None
+
+# 単一モデル
+# モデルの作成
+# class Hero(SQLModel, table=True):
+#   id: int | None = Field(default=None, primary_key=True)
+#   name: str = Field(index=True)
+#   age: int | None = Field(default=None, index=True)
+#   secret_name: str
 
 # Engineの作成(dbの接続を保持する役割)
 sqlite_file_name = "database.db"
@@ -38,15 +63,29 @@ def on_startup():
   create_db_and_tables()
 
 # Heroの作成
-@app.post("/heroes/")
-def create_hero(hero: Hero, session: SessionDep) -> Hero:
-  session.add(hero)
+# 単一モデル
+# @app.post("/heroes/")
+# def create_hero(hero: Hero, session: SessionDep) -> Hero: # 関数の戻り値をHeroの型として指定
+  # session.add(hero)
+
+# 複数モデル
+@app.post("/heroes/", response_model=HeroPublic) # returnしたときにバリデーションやシリアライザを行い、HeroPublicの型に整形
+def create_hero(hero: HeroCreate, session: SessionDep):
+  db_hero = Hero.model_validate(hero) # db用の型に変換
+  session.add(db_hero)
   session.commit()
-  session.refresh(hero) # refreshすることでdbで採番した値を取得する
-  return hero
+  session.refresh(db_hero) # refreshすることでdbで採番した値を取得する
+  return db_hero
+  # return hero
+
 
 # Heroの取得
-@app.get("/heroes/")
+# 単一モデル
+# @app.get("/heroes/")
+# def read_heroes(
+
+# 複数モデル
+@app.get("/heroes/", response_model=list[HeroPublic])
 def read_heroes(
   session: SessionDep,
   offset: int = 0,
@@ -56,12 +95,31 @@ def read_heroes(
   return heroes
 
 # 単一のHeroの取得
-@app.get("/heroes/{hero_id}")
-def read_hero(hero_id: int, session: SessionDep) -> Hero:
+# 単一モデル
+# @app.get("/heroes/{hero_id}")
+# def read_hero(hero_id: int, session: SessionDep) -> Hero:
+  # hero = session.get(Hero, hero_id)
+
+# 複数モデル
+@app.get("/heroes/{hero_id}", response_model=HeroPublic)
+def read_hero(hero_id: int, session: SessionDep):
   hero = session.get(Hero, hero_id)
   if not hero:
     raise HTTPException(status_code=404, detail="Hero not found")
   return hero
+
+# Heroの更新
+@app.patch("/heroes/{hero_id}", response_model=HeroPublic)
+def update_hero(hero_id: int, hero: HeroUpdate, session: SessionDep):
+  hero_db = session.get(Hero, hero_id)
+  if not hero_db:
+    raise HTTPException(status_code=404, detail="Hero not found")
+  hero_data = hero.model_dump(exclude_unset=True)
+  hero_db.sqlmodel_update(hero_data)
+  session.add(hero_db)
+  session.commit()
+  session.refresh(hero_db)
+  return hero_db
 
 # Heroの削除
 @app.delete("/heroes/{hero_id}")
